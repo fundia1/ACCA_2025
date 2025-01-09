@@ -2,17 +2,15 @@ import rclpy
 from rclpy.node import Node
 
 from geometry_msgs.msg import Point, PoseStamped, PoseWithCovarianceStamped
-from nav_msgs.msg import Path, Odometry
+from nav_msgs.msg import Path
 from visualization_msgs.msg import Marker, MarkerArray
-from tf_transformations import quaternion_from_euler, euler_from_quaternion
 
 # astar 코드
 import heapq
 import math
 
 # 라인 만들거
-import numpy as np
-from scipy.interpolate import UnivariateSpline
+from scipy.interpolate import CubicSpline
 
 ###패스가 보가으로 만들고 delta yaw 가 입계치 이상이면 안된다
 
@@ -94,7 +92,7 @@ class AStar:
 
     def update_start(self, pose):
         self.start = pose
-        # return self.find_path()
+        return self.find_path()
 
     def find_path(self):
 
@@ -147,108 +145,34 @@ class AStarPathMaker(Node):
             PoseWithCovarianceStamped, "/initialpose", self.call_obs, 10
         )
 
-        self.sub_local = self.create_subscription(
-            Odometry, "/odometry/navsat", self.call_local, 10
-        )
-        self.sub_marker = self.create_subscription(
-            MarkerArray, "/markers", self.call_marker, 10
-        )  # 장애물 위치
-
         self.pub_obs = self.create_publisher(MarkerArray, "/obs_pose", 10)
         self.pub_global_path = self.create_publisher(Path, "/global_path", 10)
         self.pub_spline_path = self.create_publisher(Path, "/spline_path", 10)
 
-        self.timer = self.create_timer(0.001, self.timer_callback)
-
-        self.odometry_x = None
-        self.odometry_y = None
-        self.odom_orientation = None
+        self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.start = (-5, -5)
         self.goal = (5, 5)
 
         self.obs = []
-        self.obss = []
 
         self.astar = AStar()
         self.path = []
         self.marker_array = MarkerArray()
         self.marker_id = 0
 
-    def call_marker(self, msg):
-        if msg is not None and hasattr(msg, "markers") and msg.markers:
-            markers = msg.markers
-            observed_points = []
-
-            for p in markers:
-                points = np.array([[point.x, point.y] for point in p.points])
-                if len(points) > 0:
-                    # points의 중점을 계산
-                    center = np.min(points, axis=0)
-
-                    transformed_center = self.transform_cluster_centers(
-                        np.array([center])
-                    )
-
-                    # 변환된 중심점을 저장
-                    observed_points.append(transformed_center[0])
-
-            # 변환된 중심점들을 numpy 배열로 저장
-            if observed_points:
-                self.obs = np.array(observed_points)
-                self.astar.update_obstacle(self.obs[-1])
-        pass
-
     def call_goal(self, msg):
         self.goal = (round(msg.pose.position.x, 1), round(msg.pose.position.y, 1))
         self.path = self.astar.update_goal(self.goal)
         print("set_goal")
-
-    def call_local(self, msg):
-        self.start = (msg.pose.pose.position.x, msg.pose.pose.position.y)
-        self.astar.update_start(self.start)
-
-        self.odometry_x = msg.pose.pose.position.x
-        self.odometry_y = msg.pose.pose.position.y
-
-        orientation = msg.pose.pose.orientation
-        quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
-        euler = euler_from_quaternion(quaternion)
-        self.odom_orientation = quaternion
-
-    def transform_cluster_centers(self, cluster_centers):
-        if len(cluster_centers) == 0:
-            return np.array([])
-        euler = euler_from_quaternion(self.odom_orientation)
-        _, _, yaw = euler
-
-        rotation_angle = np.rad2deg(-yaw)
-
-        rotated_centers = self.rotate_points(cluster_centers, rotation_angle)
-
-        transformed_centers = rotated_centers + np.array(
-            (self.odometry_x, self.odometry_y)
-        )
-
-        return transformed_centers
-
-    def rotate_points(self, points, angle):
-        angle_radians = np.deg2rad(angle)
-        rotation_matrix = np.array(
-            [
-                [np.cos(angle_radians), -np.sin(angle_radians)],
-                [np.sin(angle_radians), np.cos(angle_radians)],
-            ]
-        )
-        rotated_points = np.dot(points, rotation_matrix)
-        return rotated_points
+        print(self.path)
 
     def call_obs(self, msg):
         print("set_obs")
-        self.obss.append(
+        self.obs.append(
             (round(msg.pose.pose.position.x, 1), round(msg.pose.pose.position.y, 1))
         )
-        self.astar.update_obstacle(self.obss[-1])
+        self.astar.update_obstacle(self.obs[-1])
         self.path = self.astar.update_goal(self.goal)
 
         # 시긱화
@@ -292,41 +216,15 @@ class AStarPathMaker(Node):
                     return False
         return True
 
-    def smooth_path(self, path, max_curvature=0.2):
-        """
-        Smooth a path to respect a maximum curvature constraint.
+    def timer_callback(self):
+        # 퍼블리시
+        self.pub_obs.publish(self.marker_array)
+        path = self.path  # self.astar.find_path()
+        while not self.check_path():
+            self.path = self.astar.update_goal(self.goal)
+            print("not")
+            path = self.astar.find_path()
 
-        Args:
-            path (list of tuples): List of (x, y) waypoints.
-            max_curvature (float): Maximum allowable curvature (1/R).
-
-        Returns:
-            list of tuples: Smoothed path as a list of (x, y) waypoints.
-        """
-        x = [point[0] for point in path]
-        y = [point[1] for point in path]
-
-        # x와 y를 정렬
-        sorted_indices = np.argsort(x)
-        x = np.array(x)[sorted_indices]
-        y = np.array(y)[sorted_indices]
-
-        # 스플라인 생성
-        spl = UnivariateSpline(x, y, s=1000)
-
-        # 부드러운 x, y 좌표 생성
-        local_x = np.linspace(min(x), max(x), 100)
-        local_y = spl(local_x)
-
-        # 부드러운 경로 생성
-        smoothed_path = []
-        for i in range(len(local_x) - 1):
-
-            smoothed_path.append((local_x[i], local_y[i]))
-
-        return smoothed_path
-
-    def path_publish(self, path):
         path_msg = Path()
         path_msg.header.frame_id = "map"
         path_msg.header.stamp = self.get_clock().now().to_msg()
@@ -342,58 +240,6 @@ class AStarPathMaker(Node):
 
         # Path 퍼블리시
         self.pub_global_path.publish(path_msg)
-
-    def smooth_path_publish(self, path):
-        path_msg = Path()
-        path_msg.header.frame_id = "map"
-        path_msg.header.stamp = self.get_clock().now().to_msg()
-
-        smoothed_path = self.path_smooth(path, max_curvature=0.01)
-
-        # Path에 포인트 추가
-        for i in range(1, len(smoothed_path)):
-            # 현재 점과 이전 점의 차이로 yaw 계산
-            point = smoothed_path[i]
-            prev_point = smoothed_path[i - 1]
-
-            dx = -+point[0] - prev_point[0]
-            dy = +point[1] - prev_point[1]
-
-            yaw = np.arctan2(dy, dx)  # yaw 계산
-
-            # Quaternion으로 변환
-            q = quaternion_from_euler(0, 0, yaw)
-
-            pose = PoseStamped()
-            pose.pose.position.x = float(point[0])
-            pose.pose.position.y = float(point[1])
-
-            pose.pose.orientation.x = q[0]
-            pose.pose.orientation.y = q[1]
-            pose.pose.orientation.z = q[2]
-            pose.pose.orientation.w = q[3]
-
-            path_msg.poses.append(pose)
-
-        # Path 퍼블리시
-        self.pub_spline_path.publish(path_msg)
-
-    def timer_callback(self):
-        not_count = 0
-        # 퍼블리시
-        self.pub_obs.publish(self.marker_array)
-        path = self.path  # self.astar.find_path()
-        while not self.check_path():
-            self.path = self.astar.update_goal(self.goal)
-            print("not")
-            not_count += 1
-            if not_count > 4:
-                break
-            path = self.astar.find_path()
-
-        if len(path) > 2:
-            self.path_publish(path)
-            self.smooth_path_publish(path)
 
 
 def main(args=None):
