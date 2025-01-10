@@ -12,6 +12,9 @@ from geometry_msgs.msg import Pose
 import math
 from nav_msgs.msg import Odometry
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
+import os
+
+os.chdir("/home/jinju/ws/src/python_sim/python_sim/map/occupied_grid")
 
 
 class MapUpdater(Node):

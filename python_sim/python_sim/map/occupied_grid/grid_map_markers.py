@@ -6,6 +6,9 @@ from std_msgs.msg import Header
 import numpy as np
 from PIL import Image
 import yaml
+from visualization_msgs.msg import Marker, MarkerArray
+import math
+from nav_msgs.msg import Odometry
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
 import os
 
@@ -25,31 +28,78 @@ class MapUpdater(Node):
         self.map_array = None
         self.resolution = None
         self.origin = None
-        self.inflation_radius = 0.3  # 인플레이션 반경 (미터 단위)
+        self.inflation_radius = 1.2  # 인플레이션 반경 (미터 단위)
 
+        self.robot = [0, 0, 0]
         # 맵 퍼블리셔
         self.map_publisher = self.create_publisher(OccupancyGrid, "/static_map", 10)
 
-        # 구독자 생성
+        self.create_subscription(
+            Odometry, "/localization/kinematic_state", self.odom_callback, 10
+        )
+
+        self.create_subscription(MarkerArray, "/markers", self.marker_callback, 10)
+
+        # # 구독자 생성
         self.create_subscription(
             PoseWithCovarianceStamped, "/initialpose", self.initialpose_callback, 10
         )
-        self.create_subscription(PoseStamped, "/goal_pose", self.goal_pose_callback, 10)
+        # self.create_subscription(PoseStamped, "/goal_pose", self.goal_pose_callback, 10)
 
         # 초기 맵 로드
         self.load_map()
         self.publish_map()
 
+    def odom_callback(self, msg):
+        # Odometry 메시지에서 위치와 회전 정보를 추출
+        position = msg.pose.pose.position
+        orientation = msg.pose.pose.orientation
+
+        # 로봇의 현재 위치
+        self.robot[0] = position.x
+        self.robot[1] = position.y
+
+        # Quaternion을 yaw로 변환
+        quaternion = [orientation.x, orientation.y, orientation.z, orientation.w]
+        self.robot[2] = euler_from_quaternion(quaternion)[2]  # yaw (회전각)
+
+    def marker_callback(self, msg):
+        # MarkerArray 데이터 처리
+        for marker in msg.markers:
+            for point in marker.points:
+                map_x, map_y = self.velodyne_to_map(point.x, point.y)
+
+                # 맵 업데이트 함수 호출
+                self.update_map_with_pose(
+                    (map_x, map_y), value=100, apply_inflation=True
+                )
+
+        self.publish_map()
+
+    def velodyne_to_map(self, x, y):
+        """Velodyne 기준 좌표를 map 기준 좌표로 변환"""
+        robot_x, robot_y, robot_yaw = self.robot
+        x += 1
+        # 벨로다인 좌표를 로봇 기준에서 맵 기준으로 변환
+        map_x = robot_x + x * math.cos(robot_yaw) - y * math.sin(robot_yaw)
+        map_y = robot_y + x * math.sin(robot_yaw) + y * math.cos(robot_yaw)
+
+        return map_x, map_y
+
     def load_map(self):
-        # YAML 파일 읽기
         with open(self.yaml_file, "r") as file:
             self.map_metadata = yaml.safe_load(file)
+
+        self.get_logger().info(f"Map metadata loaded: {self.map_metadata}")
 
         self.map_image_file = self.map_metadata["image"]
         self.resolution = self.map_metadata["resolution"]
         self.origin = self.map_metadata["origin"]
 
-        # 이미지 로드
+        # 추가 디버깅 메시지
+        self.get_logger().info(f"Map origin: {self.origin}")
+        self.get_logger().info(f"Resolution: {self.resolution}")
+
         image = Image.open(self.map_image_file)
         self.map_array = np.array(image, dtype=np.uint8)
 
@@ -74,6 +124,7 @@ class MapUpdater(Node):
         occupancy_grid_msg.info.origin.orientation.y = quaternion[1]
         occupancy_grid_msg.info.origin.orientation.z = quaternion[2]
         occupancy_grid_msg.info.origin.orientation.w = quaternion[3]
+
         # 맵 데이터를 OccupancyGrid 메시지로 변환
         occupancy_grid_msg.data = (
             self.convert_image_to_grid(self.map_array).flatten().tolist()
@@ -106,37 +157,33 @@ class MapUpdater(Node):
 
     def update_map_with_pose(self, pose, value=255, apply_inflation=True):
         # 포즈를 Occupancy Grid 좌표로 변환
-        x = int((pose.position.x - self.origin[0]) / self.resolution)
-        y = int((pose.position.y - self.origin[1]) / self.resolution)
+        x, y = pose
+        x -= self.origin[0]
+        y -= self.origin[1]
+
+        # 회전 변환 적용
+        yaw = self.origin[2]  # 맵의 회전(yaw)
+        map_x = int((x * math.cos(yaw) + y * math.sin(yaw)) / self.resolution)
+        map_y = int((-x * math.sin(yaw) + y * math.cos(yaw)) / self.resolution)
 
         if (
-            x < 0
-            or x >= self.map_array.shape[1]
-            or y < 0
-            or y >= self.map_array.shape[0]
+            map_x < 0
+            or map_x >= self.map_array.shape[1]
+            or map_y < 0
+            or map_y >= self.map_array.shape[0]
         ):
-            self.get_logger().warn(
-                f"Pose ({pose.position.x}, {pose.position.y}) is out of bounds."
-            )
             return
 
-        # 목표 위치를 비점유로 설정하거나 장애물로 설정
-        if value == 255:  # goal 위치 처리
-            self.map_array[y, x] = 255  # 목표는 비점유(흰색)으로 표시
-        else:
-            self.map_array[y, x] = value  # 장애물(검정)으로 표시
+        self.map_array[map_y, map_x] = value
 
-        # 인플레이션을 적용할지 여부 결정
         if apply_inflation:
-            self.apply_inflation(x, y, max_cost=10)
+            self.apply_inflation(map_x, map_y, max_cost=10)
 
     def apply_inflation(self, x, y, max_cost):
-        # 인플레이션 반경을 셀 단위로 계산
         inflation_radius_cells = int(self.inflation_radius / self.resolution)
         for i in range(-inflation_radius_cells, inflation_radius_cells + 1):
             for j in range(-inflation_radius_cells, inflation_radius_cells + 1):
                 nx, ny = x + i, y + j
-                # 맵 경계를 넘지 않도록 처리
                 if (
                     nx < 0
                     or nx >= self.map_array.shape[1]
@@ -147,40 +194,28 @@ class MapUpdater(Node):
 
                 distance = np.sqrt(i**2 + j**2) * self.resolution
                 if distance <= self.inflation_radius:
-                    # 거리 기반 코스트 계산
                     cost = max_cost * (1 - distance / self.inflation_radius)
-                    cost = max(0, max(0, int(cost)))
-                    # 인플레이션 적용 (검정)
+                    cost = max(0, int(cost))
                     self.map_array[ny, nx] = min(self.map_array[ny, nx], cost)
 
     def save_map_to_file(self):
-        # 수정된 맵 데이터를 이미지로 저장
         updated_image = Image.fromarray(self.map_array)
         updated_image.save(self.map_image_file)
         self.get_logger().info(f"Updated map saved to {self.map_image_file}.")
 
     def initialpose_callback(self, msg):
-
-        self.update_map_with_pose(msg.pose.pose, value=255, apply_inflation=False)
-        self.publish_map()
-        self.save_map_to_file()
-
-    def goal_pose_callback(self, msg):
-        # 목표 위치를 비점유로 설정하고, 그 근처를 회색으로 설정
         self.update_map_with_pose(
-            msg.pose,
-            value=0,  # goal 위치는 비점유(흰색)으로 설정
+            (msg.pose.pose.position.x, msg.pose.pose.position.y),
+            value=0,
+            apply_inflation=True,
         )
         self.publish_map()
-        self.save_map_to_file()
-        self.print_inflated_map()
+        # self.save_map_to_file()
 
-    def print_inflated_map(self):
-        for y in range(self.map_array.shape[0]):
-            for x in range(self.map_array.shape[1]):
-                cost = self.map_array[y, x]
-                if cost > 0:  # 코스트가 0보다 큰 셀만 출력
-                    print(f"Cell ({x}, {y}) - Cost: {cost}")
+    # def goal_pose_callback(self, msg):
+    #     self.update_map_with_pose((msg.pose.position.x, msg.pose.position.y), value=0)
+    #     self.publish_map()
+    #     self.save_map_to_file()
 
 
 def main(args=None):
