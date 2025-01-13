@@ -7,11 +7,18 @@ import math
 import numpy as np
 import heapq
 from tf_transformations import quaternion_from_euler, euler_from_quaternion
+import yaml
+import reeds_shepp_planner as rs
+import os
+
+os.chdir("/home/jinju/ws/src/python_sim/python_sim/path/parking")
 
 
 class PathPlanner(Node):
     def __init__(self):
         super().__init__("path_planner_node")
+
+        self.yaml_file = "goal_point.yaml"
 
         # 초기 위치와 목표 설정
         self.current_position = None
@@ -25,18 +32,22 @@ class PathPlanner(Node):
             Odometry, "/localization/kinematic_state", self.odom_callback, 10
         )
 
-        # /goal_pose 서브스크라이브
-        self.goal_subscription = self.create_subscription(
-            PoseStamped, "/goal_pose", self.goal_callback, 10
-        )
-
         # /map 서브스크라이브하여 맵 데이터 받기
         self.map_subscription = self.create_subscription(
             OccupancyGrid, "/static_map", self.map_callback, 10
         )
 
-        # 경로 퍼블리시할 마커 퍼블리셔
-        self.path_publisher = self.create_publisher(Path, "/path", 10)
+        self.parking_pub = self.create_publisher(Path, "/parking_path", 10)
+        self.timer = self.create_timer(0.1, self.timer_callback)
+
+        self.goal_1 = True
+        self.goal_2 = True
+        self.goal_3 = True
+
+        self.find_path = False
+
+        self.goal_num = 0
+        self.once = 1
 
     def map_callback(self, msg):
         # 맵 정보를 받으면 해상도와 원점 정보를 설정
@@ -60,27 +71,10 @@ class PathPlanner(Node):
         # 로봇의 현재 위치를 Odometry에서 가져오기
         self.current_position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
 
-        # if (
-        #     self.current_position is not None
-        #     and self.goal_position is not None
-        #     and self.map_array is not None
-        # ):
-        #     # 목표와 맵 데이터가 있을 때만 경로 찾기
-        #     self.plan_path()
-
-    def goal_callback(self, msg):
-        # 목표 위치를 받아서 저장
-        self.goal_position = (msg.pose.position.x, msg.pose.position.y)
-        self.get_logger().info(f"Goal position: {self.goal_position}")
-
-        if self.current_position is not None and self.map_array is not None:
-            # 목표와 맵 데이터가 있을 때만 경로 찾기
-            self.plan_path()
-
-    def plan_path(self):
+    def plan_path(self, num):
         if self.map_array is None:
             self.get_logger().warn("Map data is not available yet.")
-            return
+            return True
 
         # A* 알고리즘을 사용하여 경로 찾기
         self.costmap = (
@@ -91,15 +85,17 @@ class PathPlanner(Node):
         start_idx = self.convert_to_map_coords(self.current_position)
         goal_idx = self.convert_to_map_coords(self.goal_position)
 
-        print(start_idx, goal_idx)
+        # print(start_idx, goal_idx)
         # A* 알고리즘 실행
         a_star = AStar(start_idx, goal_idx, self.costmap)
         path = a_star.run()
         if path:
-            # self.get_logger().info(f"Path found: {path}")
-            self.publish_path(path)
+            # self.get_logger().info(f"number {num} found.")
+            return True
+
         else:
-            self.get_logger().info("No path found.")
+            # self.get_logger().info(f"number {num} No path found.")
+            return False
 
     def convert_occupancygrid_to_costmap(self, map_array):
         # 비어 있는 공간은 0, 점유된 공간은 100으로 설정
@@ -111,7 +107,7 @@ class PathPlanner(Node):
         # (x, y) -> (map_x, map_y) 변환
 
         # 현재 위치에서 기준점 (self.origin) 이동
-        print(self.origin)
+        # print(self.origin)
         x, y = position
         x -= self.origin[0]
         y -= self.origin[1]
@@ -133,95 +129,113 @@ class PathPlanner(Node):
 
         return (map_x, map_y)
 
-    def publish_path(self, path):
-        """
-        축소된 좌표 경로를 self.origin과 self.resolution을 기준으로 map 프레임 경로로 변환 및 퍼블리시
-        """
-        path_msg = Path()
-        path_msg.header.frame_id = "map"
-        path_msg.header.stamp = self.get_clock().now().to_msg()
+    def timer_callback(self):
+        if self.current_position is not None and not self.find_path:
+            if self.goal_1:
+                self.load_data(1)
+                self.goal_1 = self.plan_path(1)
+            if self.goal_2:
+                self.load_data(2)
+                self.goal_2 = self.plan_path(2)
+            if self.goal_3:
+                self.load_data(3)
+                self.goal_3 = self.plan_path(3)
 
-        origin_x, origin_y, origin_yaw = self.origin
-        resolution = self.resolution
+            if sum((self.goal_1, self.goal_2, self.goal_3)) == 1:
+                if self.goal_1:
+                    self.goal_num = 1
+                    print("goal 1")
+                if self.goal_2:
+                    self.goal_num = 2
+                    print("goal_2")
+                if self.goal_3:
+                    self.goal_num = 3
+                    print("goal_3")
+                self.find_path = True
+        if self.find_path and self.once == 1:
+            self.make_goal()
+            self.once += 1
 
-        for i in range(len(path)):
-            x, y = path[i]
+    def load_data(self, num):
+        with open(self.yaml_file, "r") as file:
+            self.goal_matadatas = yaml.safe_load(file)
 
-            # 축소된 좌표를 map 프레임 좌표로 변환
-            map_x = x * resolution
-            map_y = y * resolution
+        self.goal_position = self.goal_matadatas[f"goal_{num}"]
 
-            # origin에서 yaw 회전 적용 (월드 좌표 변환)
-            rotated_x = math.cos(origin_yaw) * map_x - math.sin(origin_yaw) * map_y
-            rotated_y = math.sin(origin_yaw) * map_x + math.cos(origin_yaw) * map_y
+    def make_goal(self):
+        path_x = []
+        path_y = []
+        path_yaw = []
 
-            world_x = rotated_x + origin_x
-            world_y = rotated_y + origin_y
+        min_radius = 2
 
-            # 방향 계산 (yaw)
-            if i < len(path) - 1:  # 다음 점이 있는 경우
-                next_x, next_y = path[i + 1]
-                next_map_x = next_x * resolution
-                next_map_y = next_y * resolution
+        step_size = 0.1
 
-                # 다음 점을 map 프레임으로 변환
-                next_rotated_x = (
-                    math.cos(origin_yaw) * next_map_x
-                    - math.sin(origin_yaw) * next_map_y
-                )
-                next_rotated_y = (
-                    math.sin(origin_yaw) * next_map_x
-                    + math.cos(origin_yaw) * next_map_y
-                )
+        pts = [
+            (35.4294, 0.0211545, 3.131),
+            (30.602, 0.266457, -2.93609),
+            (34.9868, 3.30065, 2.95774),
+            (31.1231, 0.59355, 3.131),
+            (25.333, 1.67201, -2.93609),
+            (29.2895, 4.48971, 2.95774),
+        ]
+        for i in range(2):
 
-                next_world_x = next_rotated_x + origin_x
-                next_world_y = next_rotated_y + origin_y
+            start_x = pts[i][0]
+            start_y = pts[i][1]
+            start_yaw = pts[i][2]
 
-                dx = next_world_x - world_x
-                dy = next_world_y - world_y
-            elif i > 0:  # 마지막 점인 경우 이전 점 사용
-                prev_x, prev_y = path[i - 1]
-                prev_map_x = prev_x * resolution
-                prev_map_y = prev_y * resolution
+            end_x = pts[i + 1][0]
+            end_y = pts[i + 1][1]
+            end_yaw = pts[i + 1][2]
 
-                # 이전 점을 map 프레임으로 변환
-                prev_rotated_x = (
-                    math.cos(origin_yaw) * prev_map_x
-                    - math.sin(origin_yaw) * prev_map_y
-                )
-                prev_rotated_y = (
-                    math.sin(origin_yaw) * prev_map_x
-                    + math.cos(origin_yaw) * prev_map_y
-                )
-
-                prev_world_x = prev_rotated_x + origin_x
-                prev_world_y = prev_rotated_y + origin_y
-
-                dx = world_x - prev_world_x
-                dy = world_y - prev_world_y
-            else:  # 경로에 단일 점만 있는 경우
-                dx, dy = 1.0, 0.0  # 기본 yaw 설정
-
-            yaw = math.atan2(dy, dx)
-
-            # 쿼터니언으로 변환
-            quaternion = quaternion_from_euler(0, 0, yaw)
-
-            # Pose 생성
-            pose = Pose()
-            pose.position = Point(x=world_x, y=world_y, z=0.0)
-            pose.orientation = Quaternion(
-                x=quaternion[0], y=quaternion[1], z=quaternion[2], w=quaternion[3]
+            px, py, pyaw, mode, clen = rs.reeds_shepp_planner(
+                start_x,
+                start_y,
+                start_yaw,
+                end_x,
+                end_y,
+                end_yaw,
+                min_radius,
+                step_size,
             )
+            path_x.extend(px)
+            path_y.extend(py)
+            path_yaw.extend(pyaw)
+        self.publish_parking_path(path_x, path_y, path_yaw)
 
-            # PoseStamped 생성 및 path에 추가
-            pose_stamped = PoseStamped()
-            pose_stamped.header = path_msg.header
-            pose_stamped.pose = pose
-            path_msg.poses.append(pose_stamped)
+    def publish_parking_path(self, px, py, pyaw):
+        path_msg = Path()
+        path_msg.header.stamp = self.get_clock().now().to_msg()
+        path_msg.header.frame_id = "map"  # 사용 중인 좌표계 프레임 ID 설정
 
-        # Path 퍼블리시
-        self.path_publisher.publish(path_msg)
+        # px, py, pyaw를 사용하여 Path 메시지에 포즈 추가
+        for x, y, yaw in zip(px, py, pyaw):
+            pose = PoseStamped()
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.header.frame_id = "map"
+            pose.pose.position.x = x
+            pose.pose.position.y = y
+            pose.pose.position.z = 0.0
+
+            # yaw를 quaternion으로 변환하여 orientation 설정
+            orientation = self.yaw_to_quaternion(yaw)
+            pose.pose.orientation = orientation
+
+            path_msg.poses.append(pose)
+
+        # Path 메시지 퍼블리시
+        self.parking_pub.publish(path_msg)
+        self.get_logger().info("Path published")
+
+    def yaw_to_quaternion(self, yaw):
+        """
+        Converts a yaw angle (in radians) to a Quaternion message.
+        """
+        q = Quaternion()
+        q.z = math.sin(yaw / 2.0)
+        q.w = math.cos(yaw / 2.0)
+        return q
 
 
 class AStar:
@@ -231,7 +245,7 @@ class AStar:
         self.costmap = costmap
         self.rows = len(costmap[0])
         self.cols = len(costmap)
-        print(self.rows, self.cols)
+        # print(self.rows, self.cols)
         self.open_list = []
         self.closed_list = set()
         self.came_from = {}
@@ -294,7 +308,7 @@ class AStar:
                         neighbor
                     )
                     heapq.heappush(self.open_list, (self.f_score[neighbor], neighbor))
-        print("No path found.")  # 경로가 없을 때
+        # print("No path found.")  # 경로가 없을 때
         return False
 
     def reconstruct_path(self, current):

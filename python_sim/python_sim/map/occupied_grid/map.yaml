@@ -1,14 +1,16 @@
+###school parking
+image: map.pgm       # 맵의 이미지 파일 경로
+resolution: 0.1      # 한 셀의 크기 (미터 단위)
+origin: [36.6587, -4.51594, 1.41359]  # 맵의 시작 위치 (x, y, yaw)
+negate: 0            # 이미지 색상 반전 여부 (0: 안 함, 1: 반전)
+occupied_thresh: 0.65  # 점유 상태 임계값
+free_thresh: 0.196    # 비점유 상태 임계값
+
+###k-city small
 # image: map.pgm       # 맵의 이미지 파일 경로
 # resolution: 0.1      # 한 셀의 크기 (미터 단위)
-# origin: [0.0, 0.0, 0.0]  # 맵의 시작 위치 (x, y, yaw)
+# origin: [37.9, 98.4, 1.15]  # 맵의 시작 위치 (x, y, yaw)
 # negate: 0            # 이미지 색상 반전 여부 (0: 안 함, 1: 반전)
 # occupied_thresh: 0.65  # 점유 상태 임계값
 # free_thresh: 0.196    # 비점유 상태 임계값
 
-
-image: map.pgm       # 맵의 이미지 파일 경로
-resolution: 0.1      # 한 셀의 크기 (미터 단위)
-origin: [37.9, 98.4, 1.15]  # 맵의 시작 위치 (x, y, yaw)
-negate: 0            # 이미지 색상 반전 여부 (0: 안 함, 1: 반전)
-occupied_thresh: 0.65  # 점유 상태 임계값
-free_thresh: 0.196    # 비점유 상태 임계값
