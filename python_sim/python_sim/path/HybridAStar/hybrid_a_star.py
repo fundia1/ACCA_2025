@@ -14,27 +14,27 @@ from scipy.spatial import cKDTree
 import sys
 import pathlib
 
-sys.path.append(str(pathlib.Path(__file__).parent.parent))
+sys.path.append(str(pathlib.Path(__file__)))
 
 from dynamic_programming_heuristic import calc_distance_heuristic
-from ReedsSheppPath import reeds_shepp_path_planning as rs
+import reeds_shepp_path_planning as rs
 from car import move, check_car_collision, MAX_STEER, WB, plot_car, BUBBLE_R
 
-XY_GRID_RESOLUTION = 2.0  # [m]
-YAW_GRID_RESOLUTION = np.deg2rad(15.0)  # [rad]
-MOTION_RESOLUTION = 0.1  # [m] path interpolate resolution
-N_STEER = 20  # number of steer command
+XY_GRID_RESOLUTION = 10  # [m] X-Y 격자 해상도를 증가시켜 계산 효율성을 향상
+YAW_GRID_RESOLUTION = np.deg2rad(10.0)  # [rad] 방향 해상도를 높여 세밀한 방향 탐색 가능
+MOTION_RESOLUTION = 2  # [m] 보간 간격 증가로 계산량 감소
+N_STEER = 26  # 조향 단계 수를 줄여 탐색 시간 단축
 
-SB_COST = 100.0  # switch back penalty cost
-BACK_COST = 5.0  # backward penalty cost
-STEER_CHANGE_COST = 5.0  # steer angle change penalty cost
-STEER_COST = 1.0  # steer angle change penalty cost
-H_COST = 5.0  # Heuristic cost
+SB_COST = 30.0  # 전환 페널티를 낮춰 전환 동작 허용 가능성 증가
+BACK_COST = 3.0  # 후진 페널티를 줄여 후진 경로 활용 증대
+STEER_CHANGE_COST = 3.0  # 조향 변화 페널티를 줄여 유연성 증가
+STEER_COST = 1.0  # 조향 자체 비용 감소로 탐색 제한 완화
+H_COST = 1.0  # 휴리스틱 비용을 줄여 탐색 경로 다양성 증가
 
-show_animation = True
+show_animation = False
 
 
-class Node:
+class HNode:
 
     def __init__(
         self,
@@ -145,7 +145,7 @@ def calc_next_node(current, steer, direction, config, ox, oy, kd_tree):
 
     cost = current.cost + added_cost + arc_l
 
-    node = Node(
+    node = HNode(
         x_ind,
         y_ind,
         yaw_ind,
@@ -226,7 +226,7 @@ def update_node_with_analytic_expansion(current, goal, c, ox, oy, kd_tree):
             fd.append(d >= 0)
 
         f_steer = 0.0
-        f_path = Node(
+        f_path = HNode(
             current.x_index,
             current.y_index,
             current.yaw_index,
@@ -296,7 +296,7 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
 
     config = Config(tox, toy, xy_resolution, yaw_resolution)
 
-    start_node = Node(
+    start_node = HNode(
         round(start[0] / xy_resolution),
         round(start[1] / xy_resolution),
         round(start[2] / yaw_resolution),
@@ -307,7 +307,7 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
         [True],
         cost=0,
     )
-    goal_node = Node(
+    goal_node = HNode(
         round(goal[0] / xy_resolution),
         round(goal[1] / xy_resolution),
         round(goal[2] / yaw_resolution),
@@ -462,7 +462,7 @@ def main():
 
     # Set Initial parameters
     start = [10.0, 10.0, np.deg2rad(90.0)]
-    goal = [50.0, 50.0, np.deg2rad(-90.0)]
+    goal = [50.0, 50.0, np.deg2rad(90.0)]
 
     print("start : ", start)
     print("goal : ", goal)

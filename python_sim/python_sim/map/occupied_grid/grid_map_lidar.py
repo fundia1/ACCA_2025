@@ -41,7 +41,7 @@ class MapUpdater(Node):
         )
 
         self.create_subscription(
-            PointCloud2, "/velodyne_points", self.lidar_callback, 10
+            PointCloud2, "/cloud_filteredvvvv", self.lidar_callback, 10
         )
 
         # 구독자 생성

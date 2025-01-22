@@ -28,7 +28,7 @@ class MapUpdater(Node):
         self.map_array = None
         self.resolution = None
         self.origin = None
-        self.inflation_radius = 0.9  # 인플레이션 반경 (미터 단위)
+        self.inflation_radius = 0.7  # 인플레이션 반경 (미터 단위)
 
         self.robot = [0, 0, 0]
         # 맵 퍼블리셔

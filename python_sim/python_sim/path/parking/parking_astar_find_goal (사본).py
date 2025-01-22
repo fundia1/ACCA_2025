@@ -3,7 +3,6 @@ from rclpy.node import Node
 from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from nav_msgs.msg import Path
-from std_msgs.msg import Int16
 import math
 import numpy as np
 import heapq
@@ -11,7 +10,6 @@ from tf_transformations import quaternion_from_euler, euler_from_quaternion
 import yaml
 import reeds_shepp_planner as rs
 import os
-
 
 os.chdir("/home/jinju/ws/src/python_sim/python_sim/path/parking")
 
@@ -40,9 +38,6 @@ class PathPlanner(Node):
         )
 
         self.parking_pub = self.create_publisher(Path, "/parking_path", 10)
-
-        self.goal_num_pub = self.create_publisher(Int16, "/goal_num", 10)
-
         self.timer = self.create_timer(0.1, self.timer_callback)
 
         self.goal_1 = True
@@ -158,14 +153,8 @@ class PathPlanner(Node):
                     print("goal_3")
                 self.find_path = True
         if self.find_path and self.once == 1:
-            self.publish_goal_num()
             self.make_goal()
             self.once += 1
-
-    def publish_goal_num(self):
-        goal_num_msg = Int16()
-        goal_num_msg.data = self.goal_num
-        self.goal_num_pub.publish(goal_num_msg)
 
     def load_data(self, num):
         with open(self.yaml_file, "r") as file:
