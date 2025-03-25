@@ -1,0 +1,10 @@
+
+
+###Unity_small
+
+image: unity_small.pgm       # 맵의 이미지 파일 경로
+resolution: 0.1      # 한 셀의 크기 (미터 단위)
+origin: [-7.5848, -2.94148,  -3.1111]  # 맵의 시작 위치 (x, y, yaw)
+negate: 0            # 이미지 색상 반전 여부 (0: 안 함, 1: 반전)
+occupied_thresh: 0.65  # 점유 상태 임계값
+free_thresh: 0.196    # 비점유 상태 임계값

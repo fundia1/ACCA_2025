@@ -1,0 +1,7 @@
+# missions.yaml
+missions:
+  - U-Turn
+  - driving
+  - parking
+  - obstacle
+  # 나중에 더 추가
